@@ -3,18 +3,18 @@ class AudioProcessor {
     this.mediaRecorder = null;
     this.audioChunks = [];
     this.isRecording = false;
-    this.recordingInterval = 5000;
+    this.recordingInterval = 1200;
     this.silenceThreshold = -55;
     this.audioContext = null;
     this.analyser = null;
     this.source = null;
     this.silenceDetectionInterval = null;
     this.consecutiveSilenceCount = 0;
-    this.requiredSilenceCount = 15;
+    this.requiredSilenceCount = 5;
     this.isSpeaking = false;
     this.lastSpeechTime = 0;
-    this.debounceDelay = 1200;
-    this.minAudioSize = 3000;
+    this.debounceDelay = 400;
+    this.minAudioSize = 400;
     this.speechStartThreshold = -48;
     this.hasDetectedSpeech = false;
   }
