@@ -230,8 +230,8 @@ io.on('connection', (socket) => {
     if (a) { a.busy = false; broadcastAgents(); }
   });
 
-  socket.on('translation:text', ({ callId, original, translated, isPartial }) => {
-    socket.to(callId).emit('translation:text', { original, translated, isPartial });
+  socket.on('translation:text', ({ callId, original, translated }) => {
+    socket.to(callId).emit('translation:text', { original, translated });
   });
 
   socket.on('translation:audio', ({ callId, audioData }) => {
