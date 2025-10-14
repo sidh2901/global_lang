@@ -206,11 +206,14 @@ socket.on('call:hangup', () => {
   cleanup();
 });
 
-socket.on('translation:text', ({ original, translated }) => {
-  if (translated) {
-    updateTranslationStatus(`Remote said: "${original}" → "${translated}"`);
-    logToTranscriptionLogs(`🗣️ REMOTE: "${original}" → "${translated}"`, 'translation');
-  }
+socket.on('translation:text', ({ original, translated, isPartial }) => {
+  if (!translated) return;
+  const statusPrefix = isPartial ? 'Remote (partial)' : 'Remote said';
+  const icon = isPartial ? '🌀' : '🗣️';
+  const logType = isPartial ? 'transcription' : 'translation';
+
+  updateTranslationStatus(`${statusPrefix}: "${original}" → "${translated}"`);
+  logToTranscriptionLogs(`${icon} REMOTE${isPartial ? ' (partial)' : ''}: "${original}" → "${translated}"`, logType);
 });
 
 socket.on('translation:audio', async ({ audioData }) => {
@@ -234,27 +237,46 @@ function startTranslation() {
 
   audioProcessor = new AudioProcessor();
 
-  audioProcessor.startRecording(localStream, async (audioBlob) => {
-    const { original, translated, audioBlob: translatedAudio } = await translationEngine.processOutgoingAudio(audioBlob);
+  audioProcessor.startRecording(
+    localStream,
+    async (audioBlob) => {
+      const { original, translated, audioBlob: translatedAudio } = await translationEngine.processOutgoingAudio(audioBlob);
 
-    if (translated && currentCallId) {
-      socket.emit('translation:text', {
-        callId: currentCallId,
-        original,
-        translated
-      });
-
-      if (translatedAudio) {
-        const arrayBuffer = await translatedAudio.arrayBuffer();
-        socket.emit('translation:audio', {
+      if (translated && currentCallId) {
+        socket.emit('translation:text', {
           callId: currentCallId,
-          audioData: Array.from(new Uint8Array(arrayBuffer))
+          original,
+          translated
         });
-      }
 
-      updateTranslationStatus(`You said: "${original}"`);
+        if (translatedAudio) {
+          const arrayBuffer = await translatedAudio.arrayBuffer();
+          socket.emit('translation:audio', {
+            callId: currentCallId,
+            audioData: Array.from(new Uint8Array(arrayBuffer))
+          });
+        }
+
+        updateTranslationStatus(`You said: "${original}"`);
+      }
+    },
+    async (partialBlob) => {
+      if (!translationEngine) return;
+      const { original, translated } = await translationEngine.processPartialAudio(partialBlob);
+
+      if (translated && currentCallId) {
+        socket.emit('translation:text', {
+          callId: currentCallId,
+          original,
+          translated,
+          isPartial: true
+        });
+
+        updateTranslationStatus(`You (partial): "${original}" → "${translated}"`);
+        logToTranscriptionLogs(`🌀 YOU (partial): "${original}" → "${translated}"`, 'transcription');
+      }
     }
-  });
+  );
 }
 
 function playNextTranslatedAudio() {

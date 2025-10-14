@@ -17,9 +17,12 @@ class AudioProcessor {
     this.minAudioSize = 400;
     this.speechStartThreshold = -48;
     this.hasDetectedSpeech = false;
+    this.partialEmitInterval = 600;
+    this.partialMinSize = 200;
+    this.lastPartialEmit = 0;
   }
 
-  async startRecording(stream, onChunkReady) {
+  async startRecording(stream, onChunkReady, onPartialChunk) {
     try {
       this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
       this.source = this.audioContext.createMediaStreamSource(stream);
@@ -42,6 +45,7 @@ class AudioProcessor {
       this.mediaRecorder = new MediaRecorder(stream, options);
       this.audioChunks = [];
       this.isRecording = true;
+      this.lastPartialEmit = 0;
       this.consecutiveSilenceCount = 0;
       this.isSpeaking = false;
       this.lastSpeechTime = Date.now();
@@ -52,6 +56,17 @@ class AudioProcessor {
         if (event.data.size > 0) {
           this.audioChunks.push(event.data);
           console.log('[AudioProcessor] Audio chunk received:', event.data.size, 'bytes');
+
+          if (onPartialChunk) {
+            const now = Date.now();
+            if (event.data.size > this.partialMinSize && (now - this.lastPartialEmit) >= this.partialEmitInterval) {
+              this.lastPartialEmit = now;
+              const partialBlob = new Blob([event.data], { type: event.data.type || 'audio/webm' });
+              Promise
+                .resolve(onPartialChunk(partialBlob))
+                .catch((error) => console.error('[AudioProcessor] Partial chunk handler error:', error));
+            }
+          }
         }
       };
 
@@ -129,6 +144,7 @@ class AudioProcessor {
 
   stopRecording() {
     this.isRecording = false;
+    this.lastPartialEmit = 0;
 
     if (this.silenceDetectionInterval) {
       clearInterval(this.silenceDetectionInterval);
@@ -165,6 +181,7 @@ class TranslationEngine {
     this.remoteLanguage = remoteLanguage;
     this.enableTranslation = enableTranslation;
     this.isProcessing = false;
+    this.isPartialProcessing = false;
     this.processingQueue = [];
     this.lastProcessedText = '';
     this.recentTranscriptions = [];
@@ -173,6 +190,9 @@ class TranslationEngine {
     this.minProcessInterval = 1000;
     this.transcriptionHistory = [];
     this.contextWindowSize = 3;
+    this.lastPartialProcessed = 0;
+    this.partialThrottleMs = 800;
+    this.lastPartialTranscript = '';
     this.mediaBlacklist = [
       'otter.ai', 'otter ai', 'transcribed by', 'https://', 'http://',
       'mbc news', 'cnn', 'bbc', 'fox news', 'breaking news', 'live report',
@@ -401,6 +421,49 @@ class TranslationEngine {
     }
   }
 
+  async processPartialAudio(audioBlob) {
+    if (!this.enableTranslation || this.myLanguage === this.remoteLanguage) {
+      return { original: '', translated: '' };
+    }
+
+    const now = Date.now();
+    if (this.isPartialProcessing || (now - this.lastPartialProcessed) < this.partialThrottleMs) {
+      return { original: '', translated: '' };
+    }
+
+    this.isPartialProcessing = true;
+
+    try {
+      const transcribed = await this.transcribe(audioBlob);
+      const normalized = typeof transcribed === 'string' ? transcribed.toLowerCase().trim() : '';
+
+      if (!normalized || normalized === this.lastPartialTranscript) {
+        return { original: '', translated: '' };
+      }
+
+      this.logToScreen('🌀 Partial transcription: ' + transcribed, 'info');
+
+      const context = this.getRecentContextEntries();
+      const translated = await this.translate(transcribed, this.remoteLanguage, context);
+
+      if (translated) {
+        this.logToScreen('⚡ Partial translation: ' + translated, 'translation');
+        this.lastPartialProcessed = now;
+        this.lastPartialTranscript = normalized;
+        return { original: transcribed, translated };
+      }
+
+      this.lastPartialTranscript = normalized;
+      this.lastPartialProcessed = now;
+      return { original: '', translated: '' };
+    } catch (error) {
+      console.error('[TranslationEngine] Partial processing error:', error);
+      return { original: '', translated: '' };
+    } finally {
+      this.isPartialProcessing = false;
+    }
+  }
+
   createTranscriptionRecord(text) {
     const safeText = typeof text === 'string' ? text : '';
     const record = {
@@ -436,6 +499,13 @@ class TranslationEngine {
       .map(entry => entry.text.trim());
 
     return context.slice(-this.contextWindowSize);
+  }
+
+  getRecentContextEntries() {
+    return this.transcriptionHistory
+      .filter(entry => entry.text && entry.text.trim().length > 0 && entry.status !== 'filtered')
+      .slice(-this.contextWindowSize)
+      .map(entry => entry.text.trim());
   }
 
   async processNextInQueue() {
